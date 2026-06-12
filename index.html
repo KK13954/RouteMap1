@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ルート検証モック</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="password-modal" class="modal">
+        <div class="modal-panel">
+          <h2>認証が必要です</h2>
+          <p>パスワードを入力してください。</p>
+          <input id="password-input" type="password" placeholder="パスワード" />
+          <div id="password-error" class="password-error" aria-live="polite"></div>
+          <button id="password-submit">送信</button>
+        </div>
+      </div>
+
+      <aside id="panel">
+        <header class="panel-header">
+          <h1>ルート検証モック</h1>
+         
+        </header>
+
+        <section class="controls">
+          <label for="origin">出発地</label>
+          <input id="origin" placeholder="出発地を入力" />
+
+          <label for="destination">目的地</label>
+          <input id="destination" placeholder="目的地を入力" />
+
+          <button id="generate">ルート・チェックポイント生成</button>
+        </section>
+
+        <section id="stats">
+          <h2>基本情報</h2>
+          <div class="stat"><strong>総走行予定距離:</strong> <span id="total-distance">—</span></div>
+          <div class="stat"><strong>総到着予想時間:</strong> <span id="total-duration">—</span></div>
+          <div class="stat"><strong>グリッドサイズ（総距離の1%）:</strong> <span id="grid-size">—</span></div>
+        </section>
+
+        <section id="checkpoints">
+          <h2>チェックポイント（3箇所）</h2>
+          <div id="cp-list"></div>
+        </section>
+
+        <section id="messages" aria-live="polite"></section>
+      </aside>
+
+      <main id="map"></main>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
