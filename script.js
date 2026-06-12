@@ -274,57 +274,68 @@ function makeNumberIcon(number){
 }
 
 function snapToInfrastructure(candidateLatLng) {
-	return new Promise((resolve, reject) => {
-		// nearbySearch を使って周辺を検索（半径1km、キーワードと主要タイプでフィルタ）
-		const request = {
-			location: candidateLatLng,
-			radius: 1000,
-			keyword: 'インターチェンジ|サービスエリア|PA|SA|JCT|駅|station|junction|interchange',
-			type: 'establishment'
-		};
+	// 半径500mで優先タイプ順に検索して、経路にもっとも近い施設を返す
+	return new Promise(async (resolve, reject) => {
+		const radius = 500;
 
-		placesService.nearbySearch(request, (results, status) => {
-			if (status === google.maps.places.PlacesServiceStatus.OK && results && results.length > 0) {
-				// 経路に近い順（candidate に近い順）にソートして最終候補を決定する
-				results.sort((a,b) => {
-					const da = google.maps.geometry.spherical.computeDistanceBetween(candidateLatLng, a.geometry.location);
-					const db = google.maps.geometry.spherical.computeDistanceBetween(candidateLatLng, b.geometry.location);
-					return da - db;
+		function nearbySearchPromise(request) {
+			return new Promise(res => {
+				placesService.nearbySearch(request, (results, status) => {
+					res({ results: results || [], status });
 				});
+			});
+		}
 
-				// 優先キーワードが含まれるものを、近い順に選ぶ（見つかれば即座に採用）
-				const priorityKeywords = ['jct','ic','インターチェンジ','サービスエリア','sa','pa','junction','interchange','service area','station'];
-				let chosen = null;
-				for (const r of results) {
-					const name = (r.name || '').toLowerCase();
-					const matchesPriority = priorityKeywords.some(k => name.indexOf(k) !== -1);
-					if (matchesPriority) { chosen = r; break; }
+		// 優先順: 高速道路インフラ系キーワード -> 駅 -> ガソリン -> コンビニ -> レストラン -> 商業施設 -> 汎用establishment
+		const checks = [
+			{ type: null, keyword: 'インターチェンジ|サービスエリア|PA|SA|JCT' },
+			{ type: 'transit_station' },
+			{ type: 'gas_station' },
+			{ type: 'convenience_store' },
+			{ type: 'restaurant' },
+			{ type: 'shopping_mall' },
+			{ type: 'establishment' }
+		];
+
+		try {
+			for (const chk of checks) {
+				const req = { location: candidateLatLng, radius };
+				if (chk.type) req.type = chk.type;
+				if (chk.keyword) req.keyword = chk.keyword;
+
+				const { results, status } = await nearbySearchPromise(req);
+				if (status === google.maps.places.PlacesServiceStatus.OK && results && results.length > 0) {
+					// 候補点に近い順にソート
+					results.sort((a, b) => {
+						const da = google.maps.geometry.spherical.computeDistanceBetween(candidateLatLng, a.geometry.location);
+						const db = google.maps.geometry.spherical.computeDistanceBetween(candidateLatLng, b.geometry.location);
+						return da - db;
+					});
+
+					// 最も近いものを採用
+					const chosen = results[0];
+					resolve({ location: chosen.geometry.location, name: chosen.name });
+					return;
 				}
-
-				// 優先候補が無ければ、最も経路に近い（候補に近い）場所を使用
-				if (!chosen) chosen = results[0];
-
-				resolve({ location: chosen.geometry.location, name: chosen.name });
-			} else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-				// 逆ジオコーディングで住所取得
-				geocoder.geocode({ location: candidateLatLng }, (geoResults, geoStatus) => {
-					if (geoStatus === 'OK' && geoResults && geoResults[0]) {
-						resolve({ location: candidateLatLng, name: geoResults[0].formatted_address });
-					} else {
-						resolve({ location: candidateLatLng, name: '未設定地点' });
-					}
-				});
-			} else {
-				// その他のエラーや NO_RESULTS
-				geocoder.geocode({ location: candidateLatLng }, (geoResults, geoStatus) => {
-					if (geoStatus === 'OK' && geoResults && geoResults[0]) {
-						resolve({ location: candidateLatLng, name: geoResults[0].formatted_address });
-					} else {
-						resolve({ location: candidateLatLng, name: '未設定地点' });
-					}
-				});
 			}
-		});
+
+			// 見つからない場合は逆ジオコーディングで住所を返す
+			geocoder.geocode({ location: candidateLatLng }, (geoResults, geoStatus) => {
+				if (geoStatus === 'OK' && geoResults && geoResults[0]) {
+					resolve({ location: candidateLatLng, name: geoResults[0].formatted_address });
+				} else {
+					resolve({ location: candidateLatLng, name: '未設定地点' });
+				}
+			});
+		} catch (err) {
+			geocoder.geocode({ location: candidateLatLng }, (geoResults, geoStatus) => {
+				if (geoStatus === 'OK' && geoResults && geoResults[0]) {
+					resolve({ location: candidateLatLng, name: geoResults[0].formatted_address });
+				} else {
+					resolve({ location: candidateLatLng, name: '未設定地点' });
+				}
+			});
+		}
 	});
 }
 
