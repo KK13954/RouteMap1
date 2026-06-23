@@ -15,6 +15,8 @@ let geocoder;
 let routePolyline = null;
 let markers = [];
 let infoWindows = [];
+let currentGridSizeMeters = null;
+let gridLines = [];
 
 // DOM
 const originInput = document.getElementById('origin');
@@ -25,6 +27,8 @@ const totalDurationEl = document.getElementById('total-duration');
 const gridSizeEl = document.getElementById('grid-size');
 const cpListEl = document.getElementById('cp-list');
 const messagesEl = document.getElementById('messages');
+const splitSelect = document.getElementById('split-count');
+const gridToggle = document.getElementById('toggle-grid');
 
 function showMessage(msg, isError = false) {
 	messagesEl.textContent = msg;
@@ -187,8 +191,15 @@ function handleDirectionsResult(route){
 	}
 	const totalCumulative = cumulative[cumulative.length - 1] || totalDistanceMeters;
 
-	// Targets at 25%,50%,75%
-	const targets = [0.25, 0.5, 0.75].map(r => ({ ratio: r, dist: r * totalCumulative }));
+		// Targets: choose split count based on UI (supports 4,5,10 and general cases)
+		let splitCount = 4;
+		if (splitSelect) {
+			const v = parseInt(splitSelect.value, 10);
+			if (!isNaN(v) && v >= 2) splitCount = v;
+		}
+		// generate ratios as (1/splitCount, 2/splitCount, ..., (splitCount-1)/splitCount)
+		const ratios = Array.from({ length: Math.max(0, splitCount - 1) }, (_, i) => (i + 1) / splitCount);
+		const targets = ratios.map(r => ({ ratio: r, dist: r * totalCumulative }));
 
 	// For each target, compute exact point along the polyline (interpolate between segment endpoints)
 	const candidatePromises = targets.map(t => {
@@ -242,12 +253,71 @@ function handleDirectionsResult(route){
 			cpListEl.appendChild(card);
 		});
 
+		// store current grid size in meters for toggling grid
+		currentGridSizeMeters = gridSize;
+		if (gridToggle && gridToggle.checked) drawGridOnMap(currentGridSizeMeters);
 		clearMessage();
 	}).catch(err => {
 		showMessage('チェックポイント抽出中にエラーが発生しました: ' + err.message, true);
 		console.error(err);
 	});
 }
+
+	function clearGrid() {
+		gridLines.forEach(line => line.setMap(null));
+		gridLines = [];
+	}
+
+	function drawGridOnMap(sizeMeters) {
+		clearGrid();
+		if (!sizeMeters || sizeMeters <= 0) return;
+		if (!map || !map.getBounds) return;
+		const bounds = map.getBounds();
+		if (!bounds) return;
+
+		const sw = bounds.getSouthWest();
+		const ne = bounds.getNorthEast();
+
+		// compute total width (east-west) at south latitude and total height (north-south)
+		const sw_e = new google.maps.LatLng(sw.lat(), ne.lng());
+		const se = sw_e;
+		const nw = new google.maps.LatLng(ne.lat(), sw.lng());
+
+		const totalWidth = google.maps.geometry.spherical.computeDistanceBetween(sw, se);
+		const totalHeight = google.maps.geometry.spherical.computeDistanceBetween(sw, nw);
+
+		const cols = Math.ceil(totalWidth / sizeMeters);
+		const rows = Math.ceil(totalHeight / sizeMeters);
+
+		// draw vertical lines
+		for (let i = 0; i <= cols; i++) {
+			const eastOffset = i * sizeMeters;
+			const start = google.maps.geometry.spherical.computeOffset(sw, eastOffset, 90);
+			const end = google.maps.geometry.spherical.computeOffset(start, totalHeight, 0);
+			const line = new google.maps.Polyline({ path: [start, end], strokeColor: '#777777', strokeOpacity: 0.9, strokeWeight: 2, map });
+			gridLines.push(line);
+		}
+
+		// draw horizontal lines
+		for (let j = 0; j <= rows; j++) {
+			const northOffset = j * sizeMeters;
+			const start = google.maps.geometry.spherical.computeOffset(sw, northOffset, 0);
+			const end = google.maps.geometry.spherical.computeOffset(start, totalWidth, 90);
+			const line = new google.maps.Polyline({ path: [start, end], strokeColor: '#777777', strokeOpacity: 0.9, strokeWeight: 2, map });
+			gridLines.push(line);
+		}
+	}
+
+	// grid toggle listener
+	if (gridToggle) {
+		gridToggle.addEventListener('change', () => {
+			if (gridToggle.checked) {
+				if (currentGridSizeMeters) drawGridOnMap(currentGridSizeMeters);
+			} else {
+				clearGrid();
+			}
+		});
+	}
 
 function placeSimpleMarker(latlng, title, color){
 	const marker = new google.maps.Marker({ position: latlng, map: map, title, icon: makeCircleIcon(color) });
@@ -276,7 +346,7 @@ function makeNumberIcon(number){
 function snapToInfrastructure(candidateLatLng) {
 	// 半径500mで優先タイプ順に検索して、経路にもっとも近い施設を返す
 	return new Promise(async (resolve, reject) => {
-		const radius = 500;
+		const radius = 250;
 
 		function nearbySearchPromise(request) {
 			return new Promise(res => {
@@ -286,13 +356,14 @@ function snapToInfrastructure(candidateLatLng) {
 			});
 		}
 
-		// 優先順: 高速道路インフラ系キーワード -> 駅 -> ガソリン -> コンビニ -> レストラン -> 商業施設 -> 汎用establishment
+		// 優先順: 高速道路インフラ系キーワード -> 駅 -> ガソリン -> コンビニ(優先) -> レストラン（カフェも同扱いだがレストラン優先） -> 商業施設 -> 汎用establishment
 		const checks = [
 			{ type: null, keyword: 'インターチェンジ|サービスエリア|PA|SA|JCT' },
 			{ type: 'transit_station' },
 			{ type: 'gas_station' },
 			{ type: 'convenience_store' },
 			{ type: 'restaurant' },
+			{ type: 'cafe' },
 			{ type: 'shopping_mall' },
 			{ type: 'establishment' }
 		];
@@ -319,7 +390,26 @@ function snapToInfrastructure(candidateLatLng) {
 				}
 			}
 
-			// 見つからない場合は逆ジオコーディングで住所を返す
+			// レストラン／カフェが見つかりにくいことを考慮して、優先検索で見つからなければ半径を拡大して再検索
+			const { results: broaderResults, status: broaderStatus } = await nearbySearchPromise({ location: candidateLatLng, radius: 500, keyword: 'restaurant|cafe' });
+			if (broaderStatus === google.maps.places.PlacesServiceStatus.OK && broaderResults && broaderResults.length > 0) {
+				// 優先度: restaurant > cafe > others, その後で距離優先
+				broaderResults.sort((a, b) => {
+					const typesA = a.types || [];
+					const typesB = b.types || [];
+					const prioA = (typesA.includes('restaurant') ? 2 : (typesA.includes('cafe') ? 1 : 0));
+					const prioB = (typesB.includes('restaurant') ? 2 : (typesB.includes('cafe') ? 1 : 0));
+					if (prioA !== prioB) return prioB - prioA; // higher priority first
+					const da = google.maps.geometry.spherical.computeDistanceBetween(candidateLatLng, a.geometry.location);
+					const db = google.maps.geometry.spherical.computeDistanceBetween(candidateLatLng, b.geometry.location);
+					return da - db;
+				});
+				const chosen = broaderResults[0];
+				resolve({ location: chosen.geometry.location, name: chosen.name });
+				return;
+			}
+
+			// どのタイプでも見つからなかった -> 逆ジオコーディングで住所を返す
 			geocoder.geocode({ location: candidateLatLng }, (geoResults, geoStatus) => {
 				if (geoStatus === 'OK' && geoResults && geoResults[0]) {
 					resolve({ location: candidateLatLng, name: geoResults[0].formatted_address });

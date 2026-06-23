@@ -31,6 +31,15 @@
           <label for="destination">目的地</label>
           <input id="destination" placeholder="目的地を入力" />
 
+          <label for="split-count">チェックポイント分割数</label>
+          <select id="split-count">
+            <option value="4">4分割（25%,50%,75%）</option>
+            <option value="5">5分割（20%,40%,60%,80%）</option>
+            <option value="10">10分割（10%,20%,30%,40%,50%,60%,70%,80%,90%）</option>
+          </select>
+
+          <label class="grid-control"><input id="toggle-grid" type="checkbox" /> グリッド</label>
+
           <button id="generate">ルート・チェックポイント生成</button>
         </section>
 
@@ -42,7 +51,7 @@
         </section>
 
         <section id="checkpoints">
-          <h2>チェックポイント（3箇所）</h2>
+          <h2>チェックポイント</h2>
           <div id="cp-list"></div>
         </section>
 
